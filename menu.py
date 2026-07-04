@@ -11,12 +11,7 @@ class UI:
 		print("")
 	@classmethod
 	def logo(cls):
-		cls.slowPrinting("░█████╗░░██╗░░░░░░░██╗░█████╗░  ░██████╗███████╗██╗░░░░░███████╗  ██████╗░░█████╗░████████╗")
-		cls.slowPrinting("██╔══██╗░██║░░██╗░░██║██╔══██╗  ██╔════╝██╔════╝██║░░░░░██╔════╝  ██╔══██╗██╔══██╗╚══██╔══╝")
-		cls.slowPrinting("██║░░██║░╚██╗████╗██╔╝██║░░██║  ╚█████╗░█████╗░░██║░░░░░█████╗░░  ██████╦╝██║░░██║░░░██║░░░")
-		cls.slowPrinting("██║░░██║░░████╔═████║░██║░░██║  ░╚═══██╗██╔══╝░░██║░░░░░██╔══╝░░  ██╔══██╗██║░░██║░░░██║░░░")
-		cls.slowPrinting("╚█████╔╝░░╚██╔╝░╚██╔╝░╚█████╔╝  ██████╔╝███████╗███████╗██║░░░░░  ██████╦╝╚█████╔╝░░░██║░░░")
-		cls.slowPrinting("░╚════╝░░░░╚═╝░░░╚═╝░░░╚════╝░  ╚═════╝░╚══════╝╚══════╝╚═╝░░░░░  ╚═════╝░░╚════╝░░░░╚═╝░░░")
-		cls.slowPrinting(f"                                {color.purple}Version: {version}{color.reset}")
+		cls.slowPrinting("DISCORD VOICE & CUSTOM RPC SELFBOT")
+		cls.slowPrinting(f"              {color.purple}Version: {version}{color.reset}")
 		time.sleep(0.5)
 		print()

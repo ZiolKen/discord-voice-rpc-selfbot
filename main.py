@@ -269,6 +269,25 @@ def on_ready(resp):
     except Exception as e:
         logger.error(f"on_ready error: {e}")
 
+# ── Gateway: on resumed (session resume — không có READY_SUPPLEMENTAL) ────────
+# FIX 5: Khi gateway reconnect bằng RESUME thay vì IDENTIFY, Discord gửi
+# event RESUMED (t="RESUMED") thay vì READY_SUPPLEMENTAL.
+# → on_ready không bao giờ fire → RPC và voice không được re-push.
+# → Fix: handle RESUMED riêng để re-push presence + rejoin voice ngay.
+@bot.gateway.command
+def on_resumed(resp):
+    if resp.raw.get("t") != "RESUMED":
+        return
+    try:
+        logger.info("Session resumed — re-pushing presence + voice")
+        ui.slowPrinting(f"{color.okcyan}[BOT]{color.reset} Session resumed — re-pushing RPC + voice")
+        sleep(0.5)
+        set_presence()
+        sleep(0.5)
+        join_voice()
+    except Exception as e:
+        logger.error(f"on_resumed error: {e}")
+
 # ── Gateway: voice disconnect watch ───────────────────────────────────────────
 @bot.gateway.command
 def voice_watch(resp):

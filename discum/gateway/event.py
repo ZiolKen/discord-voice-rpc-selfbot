@@ -8,6 +8,10 @@ class Event:
 		return self.response['t'] == 'READY'
 
 	@property
+	def resumed(self):
+		return self.response['t'] == 'RESUMED'
+
+	@property
 	def ready_supplemental(self):
 		return self.response['t'] == 'READY_SUPPLEMENTAL'
 

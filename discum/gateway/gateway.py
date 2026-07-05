@@ -85,7 +85,7 @@ class GatewayServer:
 		self.super_properties = super_properties
 		self.auth = {
 				"token": self.token,
-				"capabilities": 509,
+				"capabilities": 8189,
 				"properties": self.super_properties,
 				"presence": {
 					"status": "online",
@@ -185,7 +185,11 @@ class GatewayServer:
 					self.auth["presence"]["status"] = self.session.userSettings.get("status")
 					self.auth["presence"]["activities"] = imports.UserCombo(self).constructActivitiesList()
 			self.send({"op": self.OPCODE.IDENTIFY, "d": self.auth})
-			self.send({"op": self.OPCODE.VOICE_STATE_UPDATE, "d": {"guild_id": None, "channel_id": None, "self_mute": True, "self_deaf": False, "self_video": False}})
+			# NOTE: Removed the immediate null VOICE_STATE_UPDATE that was here.
+			# Sending "channel_id: None" right after IDENTIFY kicks the account from
+			# every voice channel before on_ready has a chance to rejoin. The selfbot's
+			# on_ready handler calls join_voice() after READY_SUPPLEMENTAL, which is
+			# the correct moment to set voice state.
 			
 		else:
 			self.resumable = False

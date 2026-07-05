@@ -2,15 +2,13 @@
 """
 Discord Voice Camper + Custom RPC Selfbot
 
-Commands:
+Commands (only own account):
   .ping
   .voice [channel_id]
   .rpc
   .status <online|idle|dnd|invisible>
-  .stop
-  .continue
-  .restart
-  .exit
+  .stop / .continue
+  .restart / .exit
 """
 
 import os
@@ -37,35 +35,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Helpers ───────────────────────────────────────────────────────────
+# ── Env helpers ───────────────────────────────────────────────────────────────
 def _env(key, default=""):
     return os.getenv(key, default).strip()
 
 def _yn(key, default="YES"):
     return _env(key, default).upper() == "YES"
 
-# ── Config ─────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 TOKEN         = _env("TOKEN")
 VOICE_CHANNEL = _env("VOICE_CHANNEL_ID")
 GUILD_ID      = _env("GUILD_ID")
 STATUS        = _env("STATUS", "online").lower()
 PREFIX        = _env("PREFIX", ".")
 
-# ── RPC config ────────────────────────────────────────────────────────────────
 APPLICATION_ID    = _env("APPLICATION_ID")
-RPC_TYPE          = int(_env("RPC_TYPE", "0"))       # 0=Playing 2=Listening 3=Watching 5=Competing
+RPC_TYPE          = int(_env("RPC_TYPE", "0"))
 RPC_NAME          = _env("RPC_NAME")
 RPC_DETAILS       = _env("RPC_DETAILS")
 RPC_STATE         = _env("RPC_STATE")
-
 RPC_LARGE_IMAGE   = _env("RPC_LARGE_IMAGE")
 RPC_LARGE_TEXT    = _env("RPC_LARGE_TEXT")
 RPC_SMALL_IMAGE   = _env("RPC_SMALL_IMAGE")
 RPC_SMALL_TEXT    = _env("RPC_SMALL_TEXT")
-
 RPC_SHOW_ELAPSED  = _yn("RPC_SHOW_ELAPSED", "YES")
 RPC_END_TIMESTAMP = _env("RPC_END_TIMESTAMP")
-
 RPC_BUTTON1_LABEL = _env("RPC_BUTTON1_LABEL")
 RPC_BUTTON1_URL   = _env("RPC_BUTTON1_URL")
 RPC_BUTTON2_LABEL = _env("RPC_BUTTON2_LABEL")
@@ -74,12 +68,12 @@ RPC_BUTTON2_URL   = _env("RPC_BUTTON2_URL")
 ui = UI()
 
 # ── Validate ──────────────────────────────────────────────────────────────────
-_errors = []
-if not TOKEN:         _errors.append("TOKEN missing")
-if not VOICE_CHANNEL: _errors.append("VOICE_CHANNEL_ID missing")
-if not GUILD_ID:      _errors.append("GUILD_ID missing")
-if _errors:
-    for e in _errors:
+_errs = []
+if not TOKEN:         _errs.append("TOKEN missing")
+if not VOICE_CHANNEL: _errs.append("VOICE_CHANNEL_ID missing")
+if not GUILD_ID:      _errs.append("GUILD_ID missing")
+if _errs:
+    for e in _errs:
         ui.slowPrinting(f"{color.fail}[ERROR]{color.reset} {e}")
     raise SystemExit
 
@@ -96,10 +90,10 @@ try:
 except SystemExit:
     raise
 except Exception as e:
-    ui.slowPrinting(f"{color.fail}[ERROR]{color.reset} Network error verifying token: {e}")
+    ui.slowPrinting(f"{color.fail}[ERROR]{color.reset} Network error: {e}")
     raise SystemExit
 
-# ── Health server ─────────────────────────────────────────
+# ── Health server (Render) ────────────────────────────────────────────────────
 def _start_health_server():
     port = int(_env("PORT", "10000"))
     class _H(BaseHTTPRequestHandler):
@@ -108,6 +102,9 @@ def _start_health_server():
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"OK")
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
         def log_message(self, *a): pass
     HTTPServer(("0.0.0.0", port), _H).serve_forever()
 
@@ -117,9 +114,10 @@ threading.Thread(target=_start_health_server, daemon=True, name="health").start(
 start_time       = time()
 in_voice         = False
 my_user_id       = None
-stopped          = False            # .stop / .continue toggle
+stopped          = False
 current_voice_ch = VOICE_CHANNEL
 _voice_lock      = threading.Lock()
+_rejoining       = False          # debounce: chỉ 1 rejoin thread tồn tại cùng lúc
 
 # ── Discord client ────────────────────────────────────────────────────────────
 bot = discum.Client(token=TOKEN, log=False)
@@ -131,38 +129,30 @@ def uptime_str() -> str:
     m, s = divmod(r, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
-# ── Build RPC activity ────────────────────────────────────────────────────────
+# ── Build RPC payload ─────────────────────────────────────────────────────────
 def build_activities() -> list:
     if not RPC_NAME:
         return []
-
-    act = {
-        "name": RPC_NAME,
-        "type": RPC_TYPE,
-    }
-
+    act: dict = {"name": RPC_NAME, "type": RPC_TYPE}
     if APPLICATION_ID:
         act["application_id"] = APPLICATION_ID
-
     if RPC_DETAILS:
         act["details"] = RPC_DETAILS
     if RPC_STATE:
         act["state"] = RPC_STATE
 
-    # ── Timestamps ────────────────────────────────────────────────────────────
-    ts = {}
+    ts: dict = {}
     if RPC_SHOW_ELAPSED:
         ts["start"] = int(start_time)
     if RPC_END_TIMESTAMP:
         try:
             ts["end"] = int(RPC_END_TIMESTAMP)
         except ValueError:
-            logger.warning("RPC_END_TIMESTAMP is not an integer, skip.")
+            logger.warning("RPC_END_TIMESTAMP phải là số nguyên Unix, bỏ qua")
     if ts:
         act["timestamps"] = ts
 
-    # ── Assets ──────────────────────────────────────────────────────────
-    assets = {}
+    assets: dict = {}
     if RPC_LARGE_IMAGE: assets["large_image"] = RPC_LARGE_IMAGE
     if RPC_LARGE_TEXT:  assets["large_text"]  = RPC_LARGE_TEXT
     if RPC_SMALL_IMAGE: assets["small_image"] = RPC_SMALL_IMAGE
@@ -170,7 +160,6 @@ def build_activities() -> list:
     if assets:
         act["assets"] = assets
 
-    # ── Buttons ────────────────────────────────────────────────────
     buttons = []
     if RPC_BUTTON1_LABEL and RPC_BUTTON1_URL:
         buttons.append({"label": RPC_BUTTON1_LABEL, "url": RPC_BUTTON1_URL})
@@ -182,11 +171,15 @@ def build_activities() -> list:
     return [act]
 
 # ── Set presence ──────────────────────────────────────────────────────────────
+# FIX 1: setStatus() cần đủ 4 args: status, activities, afk, since
+# Code cũ chỉ truyền 2 → TypeError → bị catch silently → RPC không bao giờ hoạt động
 def set_presence(status: str = STATUS) -> None:
     try:
         bot.gateway.request.setStatus(
             status=status,
             activities=build_activities(),
+            afk=False,   # ← FIX: thiếu arg này
+            since=0,     # ← FIX: thiếu arg này
         )
         logger.info(f"Presence pushed — status={status} rpc={RPC_NAME!r}")
     except Exception as e:
@@ -194,10 +187,11 @@ def set_presence(status: str = STATUS) -> None:
 
 # ── Join voice ────────────────────────────────────────────────────────────────
 def join_voice(channel_id: str = None) -> None:
-    global in_voice, current_voice_ch
+    global in_voice, current_voice_ch, _rejoining
     target = channel_id or current_voice_ch
     if not target:
-        logger.error("join_voice: There is no channel ID to join")
+        logger.error("join_voice: không có channel ID")
+        _rejoining = False
         return
     with _voice_lock:
         try:
@@ -211,13 +205,29 @@ def join_voice(channel_id: str = None) -> None:
             in_voice = True
             logger.info(f"Joined voice {target}")
             ui.slowPrinting(
-                f"{color.okgreen}[VOICE]{color.reset} "
-                f"Joined {target}"
-                + (" (custom)" if target != VOICE_CHANNEL else " (default)")
+                f"{color.okgreen}[VOICE]{color.reset} Joined {target}"
+                + (" (custom)" if target != VOICE_CHANNEL else "")
             )
         except Exception as e:
             in_voice = False
             logger.error(f"join_voice error: {e}")
+        finally:
+            _rejoining = False   # luôn reset dù thành công hay thất bại
+
+# FIX 2: Không sleep() trong gateway callback thread
+# Dispatch rejoin sang daemon thread riêng, có debounce để tránh cascade
+def _schedule_rejoin(delay: float = 5.0, channel_id: str = None) -> None:
+    global _rejoining
+    if _rejoining:
+        logger.debug("Rejoin đã được scheduled, bỏ qua")
+        return
+    _rejoining = True
+
+    def _run():
+        sleep(delay)
+        join_voice(channel_id=channel_id)
+
+    threading.Thread(target=_run, daemon=True, name="rejoin").start()
 
 # ── Gateway: on ready ─────────────────────────────────────────────────────────
 @bot.gateway.command
@@ -240,10 +250,10 @@ def on_ready(resp):
         ui.slowPrinting(f"Status      : {STATUS}")
         if RPC_NAME:
             ui.slowPrinting(f"RPC         : {TYPE_LABEL.get(RPC_TYPE,'?')} {RPC_NAME}")
-            if RPC_DETAILS:     ui.slowPrinting(f"  Details   : {RPC_DETAILS}")
-            if RPC_STATE:       ui.slowPrinting(f"  State     : {RPC_STATE}")
-            if RPC_LARGE_IMAGE: ui.slowPrinting(f"  LargeImg  : {RPC_LARGE_IMAGE}")
-            if RPC_SMALL_IMAGE: ui.slowPrinting(f"  SmallImg  : {RPC_SMALL_IMAGE}")
+            if RPC_DETAILS:       ui.slowPrinting(f"  Details   : {RPC_DETAILS}")
+            if RPC_STATE:         ui.slowPrinting(f"  State     : {RPC_STATE}")
+            if RPC_LARGE_IMAGE:   ui.slowPrinting(f"  LargeImg  : {RPC_LARGE_IMAGE}")
+            if RPC_SMALL_IMAGE:   ui.slowPrinting(f"  SmallImg  : {RPC_SMALL_IMAGE}")
             if RPC_BUTTON1_LABEL: ui.slowPrinting(f"  Button1   : {RPC_BUTTON1_LABEL}")
             if RPC_BUTTON2_LABEL: ui.slowPrinting(f"  Button2   : {RPC_BUTTON2_LABEL}")
         else:
@@ -251,7 +261,7 @@ def on_ready(resp):
         ui.slowPrinting(f"Prefix      : '{PREFIX}'")
         ui.slowPrinting("══════════════════════════════════════")
 
-        sleep(2)
+        sleep(1)
         set_presence()
         sleep(1)
         join_voice()
@@ -262,6 +272,7 @@ def on_ready(resp):
 # ── Gateway: voice disconnect watch ───────────────────────────────────────────
 @bot.gateway.command
 def voice_watch(resp):
+    # FIX 2 (cont): khai báo global ở đầu function, không trong if block
     global in_voice
     if stopped:
         return
@@ -275,23 +286,21 @@ def voice_watch(resp):
         channel = d.get("channel_id")
 
         if channel is None:
-            # kick / disconnect
+            # Bị kick / disconnect
             in_voice = False
             logger.warning("Voice disconnected — rejoining in 5s")
             ui.slowPrinting(f"{color.warning}[VOICE]{color.reset} Disconnected — rejoining in 5s...")
-            sleep(5)
-            join_voice()
+            _schedule_rejoin(delay=5.0)          # ← không sleep ở đây nữa
 
         elif channel != current_voice_ch:
-            # move
+            # Bị move sang channel khác — snap back
             in_voice = False
             logger.info(f"Moved to {channel}, snapping back to {current_voice_ch}")
             ui.slowPrinting(
                 f"{color.warning}[VOICE]{color.reset} "
-                f"Moved to {channel} — snapping back to {current_voice_ch}..."
+                f"Moved to {channel} — snapping back..."
             )
-            sleep(2)
-            join_voice()
+            _schedule_rejoin(delay=2.0)          # ← không sleep ở đây nữa
 
     except Exception as e:
         logger.error(f"voice_watch error: {e}")
@@ -321,44 +330,46 @@ def cmd_handler(resp):
         raw_cmd = content[len(PREFIX):].strip()
         cmd     = raw_cmd.lower()
 
-        # ── .ping ─────────────────────────────────────────────────────────
+        # .ping
         if cmd == "ping":
             state = "⏸️ STOPPED" if stopped else "▶️ running"
-            msg = (
-                f"🟢 Uptime: `{uptime_str()}` | "
-                f"Voice: {'✅' if in_voice else '❌'} `{current_voice_ch}` | "
-                f"{state}"
-            )
-            try: bot.sendMessage(ch, msg)
+            try:
+                bot.sendMessage(ch,
+                    f"🟢 Uptime: `{uptime_str()}` | "
+                    f"Voice: {'✅' if in_voice else '❌'} `{current_voice_ch}` | {state}"
+                )
             except: pass
 
-        # ── .voice [channel_id] ───────────────────────────────────────────
+        # .voice [channel_id]
         elif cmd == "voice" or cmd.startswith("voice "):
             parts = raw_cmd.split()
             target_ch = parts[1] if len(parts) > 1 else None
             if target_ch:
                 join_voice(channel_id=target_ch)
-                try: bot.sendMessage(ch, f"✅ Joining voice `{target_ch}` (custom)")
+                try: bot.sendMessage(ch, f"✅ Joining `{target_ch}` (custom)")
                 except: pass
             else:
                 join_voice(channel_id=VOICE_CHANNEL)
-                try: bot.sendMessage(ch, f"✅ Joining voice `{VOICE_CHANNEL}` (default)")
+                try: bot.sendMessage(ch, f"✅ Joining `{VOICE_CHANNEL}` (default)")
                 except: pass
 
-        # ── .rpc ──────────────────────────────────────────────────────────
+        # .rpc
         elif cmd == "rpc":
             set_presence()
             try: bot.sendMessage(ch, "✅ RPC refreshed")
             except: pass
 
-        # ── .status <online|idle|dnd|invisible> ──────────────────────────
+        # .status <online|idle|dnd|invisible>
         elif cmd.startswith("status "):
             new_s = cmd.split(" ", 1)[1].strip()
             if new_s in ("online", "idle", "dnd", "invisible"):
                 try:
+                    # FIX 1 (cont): truyền đủ 4 args ở đây nữa
                     bot.gateway.request.setStatus(
                         status=new_s,
                         activities=build_activities(),
+                        afk=False,
+                        since=0,
                     )
                     ui.slowPrinting(f"{color.okblue}[RPC]{color.reset} Status → {new_s}")
                     try: bot.sendMessage(ch, f"✅ Status → `{new_s}`")
@@ -366,38 +377,38 @@ def cmd_handler(resp):
                 except Exception as e:
                     logger.error(f"status cmd: {e}")
             else:
-                try: bot.sendMessage(ch, "❌ Valid values: online / idle / dnd / invisible")
+                try: bot.sendMessage(ch, "❌ Valid: online / idle / dnd / invisible")
                 except: pass
 
-        # ── .stop ─────────────────────────────────────────────────────────
+        # .stop
         elif cmd == "stop":
             if not stopped:
                 stopped = True
-                logger.info("Bot paused via .stop")
-                ui.slowPrinting(f"{color.warning}[BOT]{color.reset} Paused — voice auto-rejoin & keepalive disabled")
-                try: bot.sendMessage(ch, f"⏸️ Paused. Voice auto-rejoin & presence keepalive OFF. Send `{PREFIX}continue` to resume.")
+                logger.info("Bot paused")
+                ui.slowPrinting(f"{color.warning}[BOT]{color.reset} Paused")
+                try: bot.sendMessage(ch, f"⏸️ Paused. `{PREFIX}continue` to resume.")
                 except: pass
             else:
                 try: bot.sendMessage(ch, "ℹ️ Already stopped.")
                 except: pass
 
-        # ── .continue ─────────────────────────────────────────────────────
+        # .continue
         elif cmd == "continue":
             if stopped:
                 stopped = False
-                logger.info("Bot resumed via .continue")
+                logger.info("Bot resumed")
                 ui.slowPrinting(f"{color.okcyan}[BOT]{color.reset} Resumed")
                 set_presence()
                 sleep(0.5)
                 if not in_voice:
                     join_voice()
-                try: bot.sendMessage(ch, "▶️ Resumed — presence refreshed, voice rejoined.")
+                try: bot.sendMessage(ch, "▶️ Resumed.")
                 except: pass
             else:
                 try: bot.sendMessage(ch, "ℹ️ Already running.")
                 except: pass
 
-        # ── .restart ──────────────────────────────────────────────────────
+        # .restart
         elif cmd == "restart":
             try: bot.sendMessage(ch, "🔄 Restarting...")
             except: pass
@@ -405,7 +416,7 @@ def cmd_handler(resp):
             from os import execl
             execl(executable, executable, *argv)
 
-        # ── .exit ─────────────────────────────────────────────────────────
+        # .exit
         elif cmd == "exit":
             try: bot.sendMessage(ch, "⛔ Stopping...")
             except: pass
@@ -420,30 +431,39 @@ def cmd_handler(resp):
 
 # ── Keepalive thread ──────────────────────────────────────────────────────────
 def _keepalive():
-    presence_tick = 0
-    voice_tick    = 0
+    """
+    Re-push presence mỗi 4 phút (Discord drop status nếu không refresh).
+    Check voice mỗi 8 phút.
+    """
+    p_tick = 0
+    v_tick = 0
     while True:
         sleep(60)
         if stopped:
             continue
 
-        presence_tick += 1
-        voice_tick    += 1
+        p_tick += 1
+        v_tick  += 1
 
-        if presence_tick >= 5:
+        if p_tick >= 4:
             set_presence()
-            presence_tick = 0
+            p_tick = 0
 
-        if voice_tick >= 10:
+        if v_tick >= 8:
             if not in_voice:
-                logger.info("[keepalive] Not in voice — rejoining")
-                join_voice()
-            voice_tick = 0
+                logger.info("[keepalive] not in voice — scheduling rejoin")
+                _schedule_rejoin(delay=1.0)
+            v_tick = 0
 
 threading.Thread(target=_keepalive, daemon=True, name="keepalive").start()
 
-# ── Signal / exit ─────────────────────────────────────────────────────────────
-signal(SIGINT, lambda s, f: (_ for _ in ()).throw(KeyboardInterrupt()))
+# ── Signal handler ────────────────────────────────────────────────────────────
+_shutdown = threading.Event()
+
+def _sig_handler(sig, frame):
+    _shutdown.set()
+
+signal(SIGINT, _sig_handler)
 
 @atexit.register
 def _on_exit():
@@ -451,15 +471,54 @@ def _on_exit():
     except: pass
     logger.info("Exited cleanly")
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# FIX 3: Patch initial presence vào IDENTIFY payload TRƯỚC khi connect
+# → RPC hiện ngay khi connect, không cần chờ READY event set_presence()
+# (tham khảo từ Discord-RPC-Selfbot: set presence trước khi login)
+try:
+    bot.gateway.auth["presence"] = {
+        "status": STATUS,
+        "since": 0,
+        "activities": build_activities(),
+        "afk": False,
+    }
+    logger.info("Initial presence patched into IDENTIFY payload")
+except Exception as e:
+    logger.warning(f"Could not patch initial presence: {e}")
+
+# ── Run — FIX 4: outer retry loop, không bao giờ raise SystemExit ───────────
+# discum's auto_reconnect=True đã có while loop bên trong cho Discord disconnects.
+# Outer loop này handle các crash nặng hơn mà auto_reconnect không xử lý được.
+# Sau _MAX_CRASHES lần, dùng execl để hard restart process (Render sẽ không thấy exit).
+_MAX_CRASHES  = 10
+_crash_count  = 0
+
 from os import system as _sys, name as _name
 _sys("cls" if _name == "nt" else "clear")
 ui.logo()
 
-try:
-    bot.gateway.run(auto_reconnect=True)
-except KeyboardInterrupt:
-    pass
-except Exception as e:
-    logger.error(f"Gateway crashed: {e}")
-    raise SystemExit
+while not _shutdown.is_set():
+    try:
+        logger.info(f"Gateway connecting (crash #{_crash_count})")
+        bot.gateway.run(auto_reconnect=True)
+        # run() trả về bình thường chỉ khi close() hoặc KeyboardInterrupt
+        # Nếu _shutdown được set → thoát vòng lặp
+        if not _shutdown.is_set():
+            logger.warning("gateway.run() returned unexpectedly, retrying in 5s")
+            in_voice = False
+            sleep(5)
+    except KeyboardInterrupt:
+        break
+    except Exception as e:
+        _crash_count += 1
+        # Exponential backoff: 10s, 20s, 40s, tối đa 60s
+        delay = min(10 * (2 ** min(_crash_count - 1, 3)), 60)
+        logger.error(f"Gateway crash #{_crash_count}: {e} — retry in {delay}s")
+        in_voice = False
+        _rejoining = False
+
+        if _crash_count >= _MAX_CRASHES:
+            logger.error(f"Quá {_MAX_CRASHES} crashes — hard restart process")
+            from os import execl
+            execl(executable, executable, *argv)
+
+        sleep(delay)
